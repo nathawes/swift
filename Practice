@@ -1,0 +1,27 @@
+<<< ButtonRow("Rows") {
+     $0.title = $0.tag
+     $0.presentationMode = .segueName(segueName: "RowsExampleViewControllerSegue", onDismiss: nil)
+}
+of by .onCellSelection closure like this :
+
+<<< LabelRow () {
+     $0.title = "LabelRow"
+     $0.value = "tap the row"
+}
+ .onCellSelection { cell, row in
+     self.performSegue(withIdentifier: "yourSegue", sender: self)
+}
+// Install Menu
+	instantiationService2.createInstance(VSCodeMenu);
+
+	// Start shared process here
+	sharedProcess.spawn();
+});
+}>    }
+   let factory = registry.resolve(fullName);
+   if (factory === undefined) {
+     return;
+   }
+ 
+-  let type = fullName.split(':')[0];
++  let [type] = fullName.split(':');
