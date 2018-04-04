@@ -115,7 +115,8 @@ Compilation::Compilation(DiagnosticEngine &Diags,
                          bool SkipTaskExecution,
                          bool SaveTemps,
                          bool ShowDriverTimeCompilation,
-                         std::unique_ptr<UnifiedStatsReporter> StatsReporter)
+                         std::unique_ptr<UnifiedStatsReporter> StatsReporter,
+                         bool ForceNoFileLists)
   : Diags(Diags), TheToolChain(TC),
     TheOutputInfo(OI),
     Level(Level),
@@ -136,7 +137,8 @@ Compilation::Compilation(DiagnosticEngine &Diags,
     ForceOneBatchRepartition(ForceOneBatchRepartition),
     SaveTemps(SaveTemps),
     ShowDriverTimeCompilation(ShowDriverTimeCompilation),
-    Stats(std::move(StatsReporter)) {
+    Stats(std::move(StatsReporter)),
+    ForceNoFileLists(ForceNoFileLists) {
 };
 
 static bool writeFilelistIfNecessary(const Job *job, const ArgList &args,

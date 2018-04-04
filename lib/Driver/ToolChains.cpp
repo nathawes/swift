@@ -39,6 +39,8 @@ using namespace swift::driver;
 using namespace llvm::opt;
 
 bool ToolChain::JobContext::shouldUseInputFileList() const {
+  if (C.getForceNoFileLists())
+    return false;
   if (Args.hasArg(options::OPT_driver_use_filelists))
     return true;
   return getTopLevelInputFiles().size() > TOO_MANY_FILES;
@@ -46,6 +48,8 @@ bool ToolChain::JobContext::shouldUseInputFileList() const {
 
 bool ToolChain::JobContext::shouldUsePrimaryInputFileListInFrontendInvocation()
     const {
+  if (C.getForceNoFileLists())
+    return false;
   if (Args.hasArg(options::OPT_driver_use_filelists))
     return true;
   return InputActions.size() > TOO_MANY_FILES;
@@ -53,6 +57,8 @@ bool ToolChain::JobContext::shouldUsePrimaryInputFileListInFrontendInvocation()
 
 bool ToolChain::JobContext::shouldUseMainOutputFileListInFrontendInvocation()
     const {
+  if (C.getForceNoFileLists())
+    return false;
   if (Args.hasArg(options::OPT_driver_use_filelists))
     return true;
   return Output.getPrimaryOutputFilenames().size() > TOO_MANY_FILES;
@@ -60,6 +66,8 @@ bool ToolChain::JobContext::shouldUseMainOutputFileListInFrontendInvocation()
 
 bool ToolChain::JobContext::
     shouldUseSupplementaryOutputFileMapInFrontendInvocation() const {
+  if (C.getForceNoFileLists())
+    return false;
   if (Args.hasArg(options::OPT_driver_use_filelists))
     return true;
   static const unsigned UpperBoundOnSupplementaryOutputFileTypes =
