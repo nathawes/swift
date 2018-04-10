@@ -204,10 +204,6 @@ private:
   /// -emit-loaded-module-trace, so no other job needs to do it.
   bool PassedEmitLoadedModuleTraceToFrontendJob = false;
 
-  /// When true, file lists are never used, regardless of the number of inputs
-  /// and argv limit.
-  bool ForceNoFileLists = false;
-
   template <typename T>
   static T *unwrap(const std::unique_ptr<T> &p) {
     return p.get();
@@ -236,8 +232,7 @@ public:
               bool SkipTaskExecution = false,
               bool SaveTemps = false,
               bool ShowDriverTimeCompilation = false,
-              std::unique_ptr<UnifiedStatsReporter> Stats = nullptr,
-              bool ForceNoFileLists = false);
+              std::unique_ptr<UnifiedStatsReporter> Stats = nullptr);
   ~Compilation();
 
   ToolChain const &getToolChain() const {
@@ -311,10 +306,6 @@ public:
 
   void setShowJobLifecycle(bool value = true) {
     ShowJobLifecycle = value;
-  }
-
-  bool getForceNoFileLists() const {
-    return ForceNoFileLists;
   }
 
   /// Requests the path to a file containing all input source files. This can

@@ -547,8 +547,7 @@ static void validateEmbedBitcode(DerivedArgList &Args, OutputInfo &OI,
 
 std::unique_ptr<Compilation>
 Driver::buildCompilation(const ToolChain &TC,
-                         std::unique_ptr<llvm::opt::InputArgList> ArgList,
-                         bool ForceNoFileLists) {
+                         std::unique_ptr<llvm::opt::InputArgList> ArgList) {
   llvm::PrettyStackTraceString CrashInfo("Compilation construction");
 
   llvm::sys::TimePoint<> StartTime = std::chrono::system_clock::now();
@@ -741,8 +740,7 @@ Driver::buildCompilation(const ToolChain &TC,
                       DriverSkipExecution,
                       SaveTemps,
                       ShowDriverTimeCompilation,
-                      std::move(StatsReporter),
-                      ForceNoFileLists));
+                      std::move(StatsReporter)));
 
   // Construct the graph of Actions.
   SmallVector<const Action *, 8> TopLevelActions;

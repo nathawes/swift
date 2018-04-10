@@ -212,8 +212,7 @@ public:
   /// occurred.
   std::unique_ptr<Compilation>
   buildCompilation(const ToolChain &TC,
-                   std::unique_ptr<llvm::opt::InputArgList> ArgList,
-                   bool ForceNoFileLists = false);
+                   std::unique_ptr<llvm::opt::InputArgList> ArgList);
 
   /// Parse the given list of strings into an InputArgList.
   std::unique_ptr<llvm::opt::InputArgList>

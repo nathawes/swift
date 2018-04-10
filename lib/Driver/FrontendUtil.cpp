@@ -50,11 +50,8 @@ swift::driver::createCompilerInvocation(ArrayRef<const char *> Argv,
   if (Diags.hadAnyError())
     return nullptr;
 
-  // Don't use file lists, since they won't be written out along this code path
-  // and callers are unlikely to care about argv limits.
   std::unique_ptr<Compilation> C =
-      TheDriver.buildCompilation(*TC, std::move(ArgList),
-                                 /*ForceNoFileLists=*/true);
+      TheDriver.buildCompilation(*TC, std::move(ArgList));
   if (!C || C->getJobs().empty())
     return nullptr; // Don't emit an error; one should already have been emitted
 
