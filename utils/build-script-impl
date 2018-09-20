@@ -83,6 +83,7 @@ KNOWN_SETTINGS=(
     xctest-build-type           "Debug"          "the build variant for xctest"
     swiftpm-build-type          "Debug"          "the build variant for swiftpm"
     swiftsyntax-build-type      "Debug"          "the build variant for swiftSyntax"
+    swiftstresstester-build-type "Debug"         "the build variant for SwiftStressTester"
     llbuild-enable-assertions   "1"              "enable assertions in llbuild"
     enable-asan                 ""               "enable Address Sanitizer"
     enable-ubsan                ""               "enable Undefined Behavior Sanitizer"
@@ -137,6 +138,7 @@ KNOWN_SETTINGS=(
     skip-test-llbuild           ""               "set to skip testing llbuild"
     skip-test-swiftpm           ""               "set to skip testing swiftpm"
     skip-test-swiftsyntax       ""               "set to skip testing swiftSyntax"
+    skip-test-swiftstresstester ""               "set to skip testing swiftStressTester"
     skip-test-xctest            ""               "set to skip testing xctest"
     skip-test-foundation        ""               "set to skip testing foundation"
     skip-test-libdispatch       ""               "set to skip testing libdispatch"
@@ -191,6 +193,7 @@ KNOWN_SETTINGS=(
     install-lldb                ""               "whether to install LLDB"
     install-llbuild             ""               "whether to install llbuild"
     install-swiftpm             ""               "whether to install swiftpm"
+    install-swiftstresstester   ""               "whether to install swiftstresstester"
     install-xctest              ""               "whether to install xctest"
     install-foundation          ""               "whether to install foundation"
     install-libdispatch         ""               "whether to install libdispatch"
@@ -1169,6 +1172,7 @@ LLDB_SOURCE_DIR="${WORKSPACE}/lldb"
 LLBUILD_SOURCE_DIR="${WORKSPACE}/llbuild"
 SWIFTPM_SOURCE_DIR="${WORKSPACE}/swiftpm"
 SWIFTSYNTAX_SOURCE_DIR="${WORKSPACE}/swift-syntax"
+SWIFTSTRESSTESTER_SOURCE_DIR="${WORKSPACE}/swift-stress-tester"
 XCTEST_SOURCE_DIR="${WORKSPACE}/swift-corelibs-xctest"
 FOUNDATION_SOURCE_DIR="${WORKSPACE}/swift-corelibs-foundation"
 LIBDISPATCH_SOURCE_DIR="${WORKSPACE}/swift-corelibs-libdispatch"
@@ -1209,7 +1213,7 @@ PRODUCTS=("${PRODUCTS[@]}" swift)
 if [[ ! "${SKIP_BUILD_LLDB}" ]] ; then
      PRODUCTS=("${PRODUCTS[@]}" lldb)
 fi
-# LLBuild, SwiftPM, SwiftSyntax and XCTest are dependent on Foundation, so Foundation must be
+# LLBuild, SwiftPM, SwiftSyntax, SwiftStressTester and XCTest are dependent on Foundation, so Foundation must be
 # added to the list of build products first.
 if [[ ! "${SKIP_BUILD_LIBDISPATCH}" ]] ; then
      PRODUCTS=("${PRODUCTS[@]}" libdispatch)
@@ -1223,18 +1227,21 @@ fi
 if [[ ! "${SKIP_BUILD_PLAYGROUNDSUPPORT}" ]] ; then
      PRODUCTS=("${PRODUCTS[@]}" playgroundsupport)
 fi
-# SwiftPM and SwiftSyntax are dependent on XCTest, so XCTest must be added to the list of
-# build products first.
+# SwiftPM, SwiftSyntax and SwiftStressTester are dependent on XCTest, so XCTest 
+# must be added to the list of build products first.
 if [[ ! "${SKIP_BUILD_XCTEST}" ]] ; then
      PRODUCTS=("${PRODUCTS[@]}" xctest)
 fi
-# SwiftSyntax is dependent on SwiftPM, so SwiftPM must be added to the list of
-# build products first.
+# SwiftSyntax and SwiftStressTester are dependent on SwiftPM, so SwiftPM must be
+# added to the list of build products first.
 if [[ ! "${SKIP_BUILD_SWIFTPM}" ]] ; then
      PRODUCTS=("${PRODUCTS[@]}" swiftpm)
 fi
 if [[ ! "${SKIP_BUILD_SWIFTSYNTAX}" ]] ; then
      PRODUCTS=("${PRODUCTS[@]}" swiftsyntax)
+fi
+if [[ ! "${SKIP_BUILD_SWIFTSTRESSTESTER}" ]] ; then
+     PRODUCTS=("${PRODUCTS[@]}" swiftstresstester)
 fi
 
 # Checks if a given product is enabled (i.e. part of $PRODUCTS array)
@@ -1546,6 +1553,9 @@ function build_directory_bin() {
             swiftsyntax)
                 echo "${root}/${SWIFTSYNTAX_BUILD_TYPE}/bin"
                 ;;
+            swiftstresstester)
+                echo "${root}/${SWIFTSTRESSTESTER_BUILD_TYPE}/bin"
+                ;;
             xctest)
                 echo "${root}/${XCTEST_BUILD_TYPE}/bin"
                 ;;
@@ -1685,6 +1695,9 @@ function cmake_config_opt() {
             swiftsyntax)
                 echo "--config ${SWIFTSYNTAX_BUILD_TYPE}"
                 ;;
+            swiftstresstester)
+                echo "--config ${SWIFTSTRESSTESTER_BUILD_TYPE}"
+                ;;
             xctest)
                 echo "--config ${XCTEST_BUILD_TYPE}"
                 ;;
@@ -1790,6 +1803,32 @@ function set_swiftsyntax_build_command() {
         --swiftc-exec="$(build_directory_bin ${LOCAL_HOST} swift)/swiftc"
         --swift-syntax-test-exec="$(build_directory_bin ${LOCAL_HOST} swift)/swift-syntax-test"
         --filecheck-exec="$(build_directory_bin ${LOCAL_HOST} llvm)/FileCheck")
+}
+
+function set_swiftstresstester_build_command() {
+    if [ "${SKIP_BUILD_SWIFTSYNTAX}" ]; then
+        echo "Error: Cannot build swiftstresstester without swiftSyntax."
+        exit 1
+    fi
+
+    swiftstresstester_build_command=("$(build_directory_bin ${LOCAL_HOST} swiftpm)/swift-build")
+    local config="debug"
+    if [[ $(is_cmake_release_build_type "${SWIFTSTRESSTESTER_BUILD_TYPE}") ]] ; then
+        config="release"
+    fi
+    if [[ "${VERBOSE_BUILD}" ]] ; then
+        swiftstresstester_build_command+=(-v)
+    fi
+    swiftstresstester_build_command+=(
+        --build-path="${build_dir}"
+        --package-path="${SWIFTSTRESSTESTER_SOURCE_DIR}/SourceKitStressTester"
+        --configuration="${config}"
+        -Xswiftc -lSwiftSyntax
+        -Xswiftc -I"$(build_directory ${host} swiftsyntax)/${config}"
+        -Xswiftc -L"$(build_directory ${host} swiftsyntax)/${config}"
+        -Xlinker -rpath -Xlinker "$(build_directory ${host} swiftsyntax)/${config}"
+        -Xlinker -rpath -Xlinker "@executable_path/${config}"
+        -Xswiftc -Fsystem -Xswiftc "$(build_directory ${host} swift)/lib")
 }
 
 # Construct the appropriate options to pass to an Xcode
@@ -2457,6 +2496,16 @@ for host in "${ALL_HOSTS[@]}"; do
 
                 continue
                 ;;
+            swiftstresstester)
+                if [[ "$(uname -s)" != "Darwin" ]]; then
+                    echo "error: unable to build swift-stress-tester on this platform"
+                    continue
+                fi
+                set_swiftstresstester_build_command
+                call "${swiftstresstester_build_command[@]}"
+
+                continue
+                ;;
             xctest)
                 SWIFTC_BIN="$(build_directory_bin ${LOCAL_HOST} swift)/swiftc"
                 XCTEST_BUILD_DIR=$(build_directory ${host} xctest)
@@ -3039,6 +3088,14 @@ for host in "${ALL_HOSTS[@]}"; do
                 # As swiftSyntax tests itself, we break early here.
                 continue
                 ;;
+            swiftstresstester)
+                if [[ "${SKIP_TEST_SWIFTSTRESSTESTER}" ]]; then
+                    continue
+                fi
+                echo "--- Running tests for ${produce} ---"
+                # TODO
+                continue
+                ;;
             xctest)
                 if [[ "${SKIP_TEST_XCTEST}" ]]; then
                     continue
@@ -3320,6 +3377,20 @@ for host in "${ALL_HOSTS[@]}"; do
                 ;;
             swiftsyntax)
                 # SwiftSyntax is not installed as part of the toolchain
+                continue
+                ;;
+            swiftstresstester)
+                # TODO: should be installed as part of the toolchain
+                if [[ -z "${INSTALL_SWIFTSTRESSTESTER}" ]] ; then
+                    continue
+                fi
+                if [[ -z "${INSTALL_DESTDIR}" ]] ; then
+                    echo "--install-destdir is required to install products."
+                    exit 1
+                fi
+
+                echo "--- Installing ${product} ---"
+                call "${swiftpm_bootstrap_command[@]}" --prefix="${host_install_destdir}${host_install_prefix}" install
                 continue
                 ;;
             xctest)
