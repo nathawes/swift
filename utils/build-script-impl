@@ -1811,24 +1811,26 @@ function set_swiftstresstester_build_command() {
         exit 1
     fi
 
-    swiftstresstester_build_command=("$(build_directory_bin ${LOCAL_HOST} swiftpm)/swift-build")
+    local swiftsyntax_config="debug"
+    if [[ $(is_cmake_release_build_type "${SWIFTSYNTAX_BUILD_TYPE}") ]] ; then
+        swiftsyntax_config="release"
+    fi
     local config="debug"
     if [[ $(is_cmake_release_build_type "${SWIFTSTRESSTESTER_BUILD_TYPE}") ]] ; then
         config="release"
     fi
+
+    swiftstresstester_build_command=("${SWIFTSTRESSTESTER_SOURCE_DIR}/SourceKitStressTester/Utilities/build-script-helper.py")
     if [[ "${VERBOSE_BUILD}" ]] ; then
         swiftstresstester_build_command+=(-v)
     fi
+    
     swiftstresstester_build_command+=(
-        --build-path="${build_dir}"
-        --package-path="${SWIFTSTRESSTESTER_SOURCE_DIR}/SourceKitStressTester"
-        --configuration="${config}"
-        -Xswiftc -lSwiftSyntax
-        -Xswiftc -I"$(build_directory ${host} swiftsyntax)/${config}"
-        -Xswiftc -L"$(build_directory ${host} swiftsyntax)/${config}"
-        -Xlinker -rpath -Xlinker "$(build_directory ${host} swiftsyntax)/${config}"
-        -Xlinker -rpath -Xlinker "@executable_path/${config}"
-        -Xswiftc -Fsystem -Xswiftc "$(build_directory ${host} swift)/lib")
+        --build-dir="${build_dir}"
+        --swift-build-dir="$(build_directory ${host} swift)"
+        --swiftpm-build-dir="$(build_directory_bin ${LOCAL_HOST} swiftpm)"
+        --swiftsyntax-build-dir="$(build_directory ${host} swiftsyntax)/${swiftsyntax_config}"
+        --config="${config}")
 }
 
 # Construct the appropriate options to pass to an Xcode
@@ -3092,8 +3094,8 @@ for host in "${ALL_HOSTS[@]}"; do
                 if [[ "${SKIP_TEST_SWIFTSTRESSTESTER}" ]]; then
                     continue
                 fi
-                echo "--- Running tests for ${produce} ---"
-                # TODO
+                echo "--- Running tests for ${product} ---"
+                call "${swiftstresstester_build_command[@]}" test
                 continue
                 ;;
             xctest)
@@ -3380,7 +3382,6 @@ for host in "${ALL_HOSTS[@]}"; do
                 continue
                 ;;
             swiftstresstester)
-                # TODO: should be installed as part of the toolchain
                 if [[ -z "${INSTALL_SWIFTSTRESSTESTER}" ]] ; then
                     continue
                 fi
@@ -3390,7 +3391,7 @@ for host in "${ALL_HOSTS[@]}"; do
                 fi
 
                 echo "--- Installing ${product} ---"
-                call "${swiftpm_bootstrap_command[@]}" --prefix="${host_install_destdir}${host_install_prefix}" install
+                call "${swiftstresstester_build_command[@]}" --prefix="${host_install_destdir}${host_install_prefix}" install
                 continue
                 ;;
             xctest)
