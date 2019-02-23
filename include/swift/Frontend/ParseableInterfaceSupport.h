@@ -89,7 +89,8 @@ class ParseableInterfaceModuleLoader : public SerializedModuleLoaderBase {
       AccessPathElem ModuleID, StringRef DirPath, StringRef ModuleFilename,
       StringRef ModuleDocFilename,
       std::unique_ptr<llvm::MemoryBuffer> *ModuleBuffer,
-      std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer) override;
+      std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer,
+      bool &isParseable) override;
 
 public:
   static std::unique_ptr<ParseableInterfaceModuleLoader>

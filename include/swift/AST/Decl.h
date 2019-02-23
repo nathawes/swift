@@ -583,12 +583,15 @@ protected:
     HasAnyUnavailableValues : 1
   );
 
-  SWIFT_INLINE_BITFIELD(ModuleDecl, TypeDecl, 1+1+1+1+1+1,
+  SWIFT_INLINE_BITFIELD(ModuleDecl, TypeDecl, 1+1+1+1+1+1+1,
     /// If the module was or is being compiled with `-enable-testing`.
     TestingEnabled : 1,
 
     /// If the module failed to load
     FailedToLoad : 1,
+
+    // Whether the module was generated via a .swiftinterface file
+    FromParseable : 1,
 
     /// Whether the module is resilient.
     ///

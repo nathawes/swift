@@ -486,7 +486,8 @@ std::error_code ParseableInterfaceModuleLoader::findModuleFilesInDirectory(
     AccessPathElem ModuleID, StringRef DirPath, StringRef ModuleFilename,
     StringRef ModuleDocFilename,
     std::unique_ptr<llvm::MemoryBuffer> *ModuleBuffer,
-    std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer) {
+    std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer,
+    bool &isParseable) {
 
   namespace path = llvm::sys::path;
 
@@ -497,6 +498,7 @@ std::error_code ParseableInterfaceModuleLoader::findModuleFilesInDirectory(
   auto &FS = *Ctx.SourceMgr.getFileSystem();
   auto &Diags = Ctx.Diags;
   llvm::SmallString<256> ModPath, InPath, OutPath;
+  isParseable = false;
 
   // First check to see if the .swiftinterface exists at all. Bail if not.
   ModPath = DirPath;
@@ -518,6 +520,8 @@ std::error_code ParseableInterfaceModuleLoader::findModuleFilesInDirectory(
       serializedASTLooksValidOrCannotBeRead(FS, ModPath)) {
     return std::make_error_code(std::errc::not_supported);
   }
+
+  isParseable = true;
 
   // If we have a prebuilt cache path, check that too if the interface comes
   // from the SDK.

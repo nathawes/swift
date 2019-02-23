@@ -49,13 +49,14 @@ protected:
   bool findModule(AccessPathElem moduleID,
                   std::unique_ptr<llvm::MemoryBuffer> *moduleBuffer,
                   std::unique_ptr<llvm::MemoryBuffer> *moduleDocBuffer,
-                  bool &isFramework);
+                  bool &isFramework, bool &isParseable);
 
   virtual std::error_code findModuleFilesInDirectory(
       AccessPathElem ModuleID, StringRef DirPath, StringRef ModuleFilename,
       StringRef ModuleDocFilename,
       std::unique_ptr<llvm::MemoryBuffer> *ModuleBuffer,
-      std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer) = 0;
+      std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer,
+      bool &isParseable) = 0;
 
   std::error_code
   openModuleFiles(AccessPathElem ModuleID,
@@ -137,7 +138,8 @@ class SerializedModuleLoader : public SerializedModuleLoaderBase {
       AccessPathElem ModuleID, StringRef DirPath, StringRef ModuleFilename,
       StringRef ModuleDocFilename,
       std::unique_ptr<llvm::MemoryBuffer> *ModuleBuffer,
-      std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer) override;
+      std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer,
+      bool &isParseable) override;
 
   bool maybeDiagnoseTargetMismatch(SourceLoc sourceLocation,
                                    StringRef moduleName,

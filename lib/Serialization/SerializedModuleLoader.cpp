@@ -94,7 +94,9 @@ std::error_code SerializedModuleLoader::findModuleFilesInDirectory(
     AccessPathElem ModuleID, StringRef DirPath, StringRef ModuleFilename,
     StringRef ModuleDocFilename,
     std::unique_ptr<llvm::MemoryBuffer> *ModuleBuffer,
-    std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer) {
+    std::unique_ptr<llvm::MemoryBuffer> *ModuleDocBuffer,
+    bool &isParseable) {
+  isParseable = false;
   if (LoadMode == ModuleLoadingMode::OnlyParseable)
     return std::make_error_code(std::errc::not_supported);
 
@@ -163,7 +165,7 @@ bool
 SerializedModuleLoaderBase::findModule(AccessPathElem moduleID,
            std::unique_ptr<llvm::MemoryBuffer> *moduleBuffer,
            std::unique_ptr<llvm::MemoryBuffer> *moduleDocBuffer,
-           bool &isFramework) {
+           bool &isFramework, bool &isParseable) {
   llvm::SmallString<64> moduleName(moduleID.first.str());
   ModuleFilenamePair fileNames(moduleName);
 
@@ -188,6 +190,7 @@ SerializedModuleLoaderBase::findModule(AccessPathElem moduleID,
 
   auto &fs = *Ctx.SourceMgr.getFileSystem();
   isFramework = false;
+  isParseable = false;
 
   llvm::SmallString<256> currPath;
 
@@ -231,7 +234,8 @@ SerializedModuleLoaderBase::findModule(AccessPathElem moduleID,
       auto result = findModuleFilesInDirectory(moduleID, path,
                                                fileNames.module.str(),
                                                fileNames.moduleDoc.str(),
-                                               moduleBuffer, moduleDocBuffer);
+                                               moduleBuffer, moduleDocBuffer,
+                                               isParseable);
       if (!result)
         return true;
     }
@@ -295,7 +299,8 @@ SerializedModuleLoaderBase::findModule(AccessPathElem moduleID,
   return !findModuleFilesInDirectory(moduleID, currPath,
                                      fileNames.module.str(),
                                      fileNames.moduleDoc.str(),
-                                     moduleBuffer, moduleDocBuffer);
+                                     moduleBuffer, moduleDocBuffer,
+                                     isParseable);
 }
 
 static std::pair<StringRef, clang::VersionTuple>
@@ -582,7 +587,8 @@ SerializedModuleLoaderBase::canImportModule(std::pair<Identifier, SourceLoc> mID
 
   // Otherwise look on disk.
   bool isFramework = false;
-  return findModule(mID, nullptr, nullptr, isFramework);
+  bool isParseable = false;
+  return findModule(mID, nullptr, nullptr, isFramework, isParseable);
 }
 
 ModuleDecl *SerializedModuleLoaderBase::loadModule(SourceLoc importLoc,
@@ -593,6 +599,7 @@ ModuleDecl *SerializedModuleLoaderBase::loadModule(SourceLoc importLoc,
 
   auto moduleID = path[0];
   bool isFramework = false;
+  bool isParseable = false;
 
   std::unique_ptr<llvm::MemoryBuffer> moduleInputBuffer;
   std::unique_ptr<llvm::MemoryBuffer> moduleDocInputBuffer;
@@ -611,7 +618,7 @@ ModuleDecl *SerializedModuleLoaderBase::loadModule(SourceLoc importLoc,
   // Otherwise look on disk.
   if (!moduleInputBuffer) {
     if (!findModule(moduleID, &moduleInputBuffer, &moduleDocInputBuffer,
-                    isFramework)) {
+                    isFramework, isParseable)) {
       return nullptr;
     }
     if (dependencyTracker)
@@ -623,6 +630,7 @@ ModuleDecl *SerializedModuleLoaderBase::loadModule(SourceLoc importLoc,
 
   auto M = ModuleDecl::create(moduleID.first, Ctx);
   Ctx.LoadedModules[moduleID.first] = M;
+  M->setFromParseable(isParseable);
   SWIFT_DEFER { M->setHasResolvedImports(); };
 
   if (!loadAST(*M, moduleID.second, std::move(moduleInputBuffer),

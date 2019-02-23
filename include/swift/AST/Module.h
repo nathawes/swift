@@ -310,6 +310,13 @@ public:
     Bits.ModuleDecl.FailedToLoad = failed;
   }
 
+  bool fromParseable() const {
+    return Bits.ModuleDecl.FromParseable;
+  }
+  void setFromParseable(bool fromParseable = true) {
+    Bits.ModuleDecl.FromParseable = fromParseable;
+  }
+
   bool hasResolvedImports() const {
     return Bits.ModuleDecl.HasResolvedImports;
   }
