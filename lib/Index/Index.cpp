@@ -564,7 +564,8 @@ private:
 
 void IndexSwiftASTWalker::visitDeclContext(DeclContext *Context) {
   IsModuleFile = false;
-  isSystemModule = Context->getParentModule()->isSystemModule();
+  isSystemModule = Context->getParentModule()->isSystemModule() ||
+    Context->getParentModule()->fromParseable();
   auto accessor = dyn_cast<AccessorDecl>(Context);
   if (accessor)
     ManuallyVisitedAccessorStack.push_back(accessor);
@@ -595,7 +596,7 @@ void IndexSwiftASTWalker::visitModule(ModuleDecl &Mod, StringRef KnownHash) {
     walk(*SrcFile);
   } else {
     IsModuleFile = true;
-    isSystemModule = Mod.isSystemModule();
+    isSystemModule = Mod.isSystemModule() || Mod.fromParseable();
     if (!handleSourceOrModuleFile(Mod, KnownHash, HashIsKnown))
       return;
     if (HashIsKnown)
