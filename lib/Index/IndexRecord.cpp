@@ -428,7 +428,7 @@ static void addModuleDependencies(ArrayRef<ModuleDecl::ImportedModule> imports,
             // We don't officially support binary swift modules, so normally
             // the index data for user modules would get generated while
             // building them.
-            if (mod->isSystemModule() && indexSystemModules) {
+            if ((mod->isSystemModule() || mod->fromParseable()) && indexSystemModules) {
               emitDataForSwiftSerializedModule(mod, indexStorePath,
                                                indexSystemModules,
                                                targetTriple, clangCI, diags,

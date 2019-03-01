@@ -685,7 +685,7 @@ bool IndexSwiftASTWalker::visitImports(
     }
 
     if (!IdxConsumer.startDependency(Mod->getName().str(), Path, IsClangModule,
-                                     Mod->isSystemModule(), Hash))
+                                     Mod->isSystemModule() || Mod->fromParseable(), Hash))
       return false;
     if (!IsClangModule)
       if (!visitImports(*Mod, Visited))

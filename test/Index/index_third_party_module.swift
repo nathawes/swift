@@ -20,7 +20,7 @@
 // Actual test: check we generate the correct index data for SomeModule
 //
 // %target-swift-ide-test -print-indexed-symbols -module-to-print SomeModule -source-filename -source-filename %s -I %t -module-cache-path %t/modulecache -enable-parseable-module-interface | %FileCheck %s
-// RUN: %target-swift-frontend -typecheck -index-store-path %t/idx -I %t -module-cache-path %t/modulecache -enable-parseable-module-interface %s
+// RUN: %target-swift-frontend -typecheck -index-system-modules -index-store-path %t/idx -I %t -module-cache-path %t/modulecache -enable-parseable-module-interface %s
 // RUN: c-index-test core -print-unit %t/idx | %FileCheck -check-prefix=UNIT %s
 // RUN: c-index-test core -print-record %t/idx | %FileCheck -check-prefix=RECORD %s
 
