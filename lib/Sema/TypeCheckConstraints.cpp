@@ -68,7 +68,7 @@ void TypeVariableType::Implementation::print(llvm::raw_ostream &OS) {
 }
 
 SavedTypeVariableBinding::SavedTypeVariableBinding(TypeVariableType *typeVar)
-  : TypeVarAndOptions(typeVar, typeVar->getImpl().getRawOptions()),
+  : TypeVar(typeVar), Options(typeVar->getImpl().getRawOptions()),
     ParentOrFixed(typeVar->getImpl().ParentOrFixed) { }
 
 void SavedTypeVariableBinding::restore() {
@@ -3673,6 +3673,8 @@ void ConstraintSystem::print(raw_ostream &out) {
       out << " [inout allowed]";
     if (tv->getImpl().canBindToNoEscape())
       out << " [noescape allowed]";
+    if (tv->getImpl().isCompletion())
+      out << " [is completion]";
     auto rep = getRepresentative(tv);
     if (rep == tv) {
       if (auto fixed = getFixedType(tv)) {

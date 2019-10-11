@@ -1143,7 +1143,8 @@ namespace {
       CS.Options |= ConstraintSystemFlags::SuppressDiagnostics;
       return CS.createTypeVariable(CS.getConstraintLocator(E),
                                    TVO_CanBindToLValue |
-                                   TVO_CanBindToNoEscape);
+                                   TVO_CanBindToNoEscape |
+                                   TVO_IsCompletion);
     }
 
     Type visitLiteralExpr(LiteralExpr *expr) {

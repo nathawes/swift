@@ -213,6 +213,25 @@ static bool acceptsTrailingClosure(const AnyFunctionType::Param &param) {
       paramTy->isAny();
 }
 
+static ArrayRef<AnyFunctionType::Param>::iterator
+getCompletionArgPos(ArrayRef<AnyFunctionType::Param> Args) {
+  return llvm::find_if(Args, [](AnyFunctionType::Param Arg) {
+    if (auto *TVT = Arg.getPlainType()->getAs<TypeVariableType>())
+      return TVT->getImpl().isCompletion();
+    return false;
+  });
+}
+
+static llvm::Optional<size_t>
+getCompletionArgIndex(ArrayRef<AnyFunctionType::Param> args) {
+  for (size_t i = 0, e = args.size(); i < e; ++i) {
+    if (auto *TVT = args[i].getPlainType()->getAs<TypeVariableType>())
+      if (TVT->getImpl().isCompletion())
+        return i;
+  }
+  return None;
+}
+
 // FIXME: This should return ConstraintSystem::TypeMatchResult instead
 //        to give more information to the solver about the failure.
 bool constraints::
@@ -913,6 +932,209 @@ public:
   }
 };
 
+class CompletionMatchTracker: public MatchCallArgumentListener {
+public:
+  ~CompletionMatchTracker() {}
+
+  void extraArgument(unsigned argIdx) {}
+
+  Optional<unsigned> missingArgument(unsigned paramIdx) {
+    return None;
+  }
+
+  bool missingLabel(unsigned paramIndex) {
+    return false;
+  }
+
+  bool extraneousLabel(unsigned paramIndex) {
+    return false;
+  }
+
+  bool incorrectLabel(unsigned paramIndex) {
+    return false;
+  }
+
+  bool outOfOrderArgument(unsigned argIdx, unsigned prevArgIdx) {
+    return false;
+  }
+
+  bool relabelArguments(ArrayRef<Identifier> newNames) {
+    return false;
+  }
+
+  bool trailingClosureMismatch(unsigned paramIdx, unsigned argIdx) {
+    return false;
+  }
+};
+
+typedef std::pair<unsigned, AnyFunctionType::Param> IndexedParam;
+static std::pair<size_t, size_t>
+getNumArgsToSynthesizeAtStart(ArrayRef<AnyFunctionType::Param> args,
+                              ArrayRef<IndexedParam> params,
+                              ParameterListInfo &ParamInfo,
+                              bool firstIsVarArgs) {
+    unsigned numToSythesize = 0;
+    auto isDefaulted = [&](const IndexedParam &param){
+      return ParamInfo.hasDefaultArgument(param.first);
+    };
+    
+    // If there are no remaining arguments, sythesize all the remaining params
+    if (args.empty())
+      return {params.size(), params.size()};
+    // If there are no remaining parameters, argument synthesis isn't going to
+    // help us here.
+    if (params.empty()) {
+      return {0, 0};
+    }
+    
+    // If there are labelled args, find the first one's matching parameter and
+    // trim these and later args/parameters from the lists.
+    auto firstLabelledArgIter = llvm::find_if(args, [](const AnyFunctionType::Param &arg) {
+      return arg.hasLabel();
+    });
+    if (firstLabelledArgIter != args.end()) {
+      const Identifier &argLabel = firstLabelledArgIter->getLabel();
+      auto matchingParamIter = llvm::find_if(params, [&](const IndexedParam &param) {
+        return param.second.hasLabel() && param.second.getLabel().compare(argLabel);
+      });
+      if (matchingParamIter == params.end())
+        return {0, 0};
+      args = args.take_front(firstLabelledArgIter - args.begin());
+      params = params.take_front(matchingParamIter - params.begin());
+    }
+    assert(!args.empty() && !params.empty());
+
+    // At this point we should only have unlabelled arguments left.
+    assert(llvm::find_if(args, [](const AnyFunctionType::Param &arg) { return arg.hasLabel(); }) == args.end());
+    
+    // If there are non-defaulted, non-varargs labelled params, no arg can match
+    // them.
+    if (llvm::find_if(params, [&](const IndexedParam &param) {
+        return param.second.hasLabel() && !param.second.isVariadic() && !isDefaulted(param);
+    }) != params.end())
+      return {0, 0};
+    
+    // If the completion parameter was itself varargs, it would eagerly consume
+    // the remaining (unlabelled) args.
+    if (firstIsVarArgs)
+      return {numToSythesize, numToSythesize};
+
+    // Increment the args to sythesize for each labelled defaulted-or-variadic
+    // param at the start of the params and trim them off.
+    params = params.drop_while([&](const IndexedParam &param) {
+      if (param.second.hasLabel() && (param.second.isVariadic() || isDefaulted(param))) {
+          ++numToSythesize;
+          return true;
+      }
+      return false;
+    });
+    
+    if (params.empty()) {
+      assert(!args.empty());
+      return {0, 0};
+    }
+    
+    // None of the arguments are labelled, so filter out any remaining defaulted
+    // or variadic labelled params from the list, reguardless of their position.
+    // The first param should be fine to leave as-is, due to the previous step.
+    SmallVector<IndexedParam, 8> worklist = { params.front() };
+    for (auto &param: params.drop_front()) {
+      if (param.second.hasLabel()) {
+        assert(param.second.isVariadic() || isDefaulted(param));
+        continue;
+      }
+      worklist.push_back(param);
+    }
+    params = llvm::makeArrayRef(worklist);
+    
+    // At this point there should be no labelled params either
+    assert(llvm::find_if(params, [](const IndexedParam &param) {
+      return param.second.hasLabel();
+    }) == params.end());
+
+    // Any remaining variadic parameter would eagerly consume any arguments that
+    // could match the parameters after it, so remove those.
+    auto variadic = llvm::find_if(params, [](const IndexedParam &param) {
+      return param.second.isVariadic();
+    });
+    if (variadic != params.end()) {
+      // if any of the removed params are required, they could never be
+      // fulfilled, so we fail.
+      for (auto &param: llvm::makeArrayRef(variadic + 1, params.end())) {
+        if (!param.second.isVariadic() && !isDefaulted(param))
+          return {0, 0};
+      }
+      // Otherwise go ahead and drop them.
+      params = llvm::makeArrayRef(params.begin(), variadic + 1);
+    }
+    
+    // If the first param is variadic all remaining args will be consumed by it
+    // and we don't want to sythesize anything extra.
+    if (params.front().second.isVariadic())
+        return {numToSythesize, numToSythesize};
+
+    // At this point the first parameter is non-variadic
+    assert(!params.empty() && !params.front().second.isVariadic());
+    
+    // Now we should only have:
+    // - required unlabelled params
+    // - defaulted unlabelled params
+    // - at most one variadic unlabelled param
+    
+    size_t required = llvm::count_if(params, [&](const IndexedParam &param) {
+      return !param.second.isVariadic() && !isDefaulted(param);
+    });
+    
+    // If the number of required params > the number of arguments, fail.
+    if (required > args.size())
+      return {0, 0};
+    
+    // If the number of required params == the number of arguments, sythesize
+    // any leading defaulted params and return.
+    if (required == args.size()) {
+      while (!params.empty() && isDefaulted(params.front())) {
+        ++numToSythesize;
+      }
+      return {numToSythesize, numToSythesize};
+    }
+    
+    // The number of required params < the number of arguments, so we may or may
+    // not be able to form a solution at this point, depending on whether the
+    // types of the lined-up arguments match.
+    size_t min = numToSythesize;
+    
+    // Now work out the maximum number of sythesized params it's worth trying.
+    
+    // If the last parameter is variadic (and it should be the only one) it
+    // can consume all arguments present, and the others can be fulfilled by
+    // sythesized arguemnts.
+    if (params.back().second.isVariadic())
+        return {min, min + params.size() - 1};
+    
+    // At this point we have:
+    // - required unlabelled params
+    // - defaulted unlabelled params
+    return {min, min + params.size() - args.size()};
+}
+
+static AnyFunctionType::Param
+synthesizeArgumentFrom(ConstraintSystem &cs,
+                       const AnyFunctionType::Param &param,
+                       ConstraintLocatorBuilder locator,
+                       unsigned paramIdx, unsigned argIdx) {
+  auto *argLoc = cs.getConstraintLocator(locator
+      .withPathElement(LocatorPathElt::ApplyArgToParam(
+          argIdx, paramIdx, param.getParameterFlags()))
+      .withPathElement(LocatorPathElt::SynthesizedArgument(argIdx)));
+  auto *argType = cs.createTypeVariable(argLoc, TVO_CanBindToInOut |
+                                                TVO_CanBindToLValue |
+                                                TVO_CanBindToNoEscape);
+  
+  cs.addConstraint(ConstraintKind::Bind, argType, param.getPlainType(),
+                   locator);
+  return param.withType(argType);
+}
+
 // Match the argument of a call to the parameter.
 ConstraintSystem::TypeMatchResult constraints::matchCallArguments(
     ConstraintSystem &cs, ArrayRef<AnyFunctionType::Param> args,
@@ -934,6 +1156,70 @@ ConstraintSystem::TypeMatchResult constraints::matchCallArguments(
   SmallVector<AnyFunctionType::Param, 8> argsWithLabels;
   argsWithLabels.append(args.begin(), args.end());
   AnyFunctionType::relabelParams(argsWithLabels, argLabels);
+
+
+    
+  SmallVector<ParamBinding, 4> parameterBindings;
+  auto completionIdx = getCompletionArgIndex(argsWithLabels);
+  if (completionIdx) {
+    CompletionMatchTracker listener;
+
+    // work out which param binds to the completion arg.
+    constraints::matchCallArguments(
+        argsWithLabels, params, paramInfo, hasTrailingClosure,
+        false, listener, parameterBindings);
+      
+    auto completionParamIdx = llvm::find_if(parameterBindings, [&](ParamBinding Binding) {
+      return llvm::find(Binding, *completionIdx) != Binding.end();
+    });
+    
+    // If the completion param was matches, work out how many args to synthesize
+    if (completionParamIdx != parameterBindings.end()) {
+      assert(params.size() == parameterBindings.size());
+      auto remainingArgs = llvm::makeArrayRef(argsWithLabels.begin() + *completionIdx + 1, argsWithLabels.end());
+      SmallVector<IndexedParam, 8> remainingParams;
+      for(size_t index = completionParamIdx - parameterBindings.begin() + 1, end = params.size(); index < end; ++index)
+        remainingParams.emplace_back(index, params[index]);
+      bool isStartVariadic = params[completionParamIdx - parameterBindings.begin()].isVariadic();
+      
+      auto result = getNumArgsToSynthesizeAtStart(remainingArgs, remainingParams, paramInfo, isStartVariadic);
+    
+      SmallVector<Constraint*, 4> constraints;
+      //cs.addDisjunctionConstraint(<#ArrayRef<Constraint *> constraints#>, <#ConstraintLocatorBuilder locator#>)
+      if (result.first > 0) {
+        auto paramsToSynthesize = llvm::makeArrayRef(remainingParams).take_front(result.first);
+          
+        for (const auto &param: llvm::reverse(paramsToSynthesize)) {
+          unsigned newArgIdx = argsWithLabels.size();
+          const AnyFunctionType::Param &synthParam = param.second;
+          argsWithLabels.insert(argsWithLabels.begin() + *completionIdx,
+            synthesizeArgumentFrom(cs, synthParam, locator, param.first, newArgIdx));
+        }
+        auto type1 = FunctionType::get(argsWithLabels, cs.getASTContext().TheAnyType);
+        auto type2 = FunctionType::get(params, cs.getASTContext().TheAnyType);
+                                       
+        constraints.push_back(Constraint::create(cs, ConstraintKind::ApplicableFunction, type1,
+                           type2, cs.getConstraintLocator(locator.withPathElement(LocatorPathElt::ApplyFunction()))));
+     }
+     if (result.second - result.first > 0) {
+       auto paramsToSynthesize = llvm::makeArrayRef(remainingParams).take_front(result.second).drop_front(result.first);
+         
+       for (const auto &param: llvm::reverse(paramsToSynthesize)) {
+         unsigned newArgIdx = argsWithLabels.size();
+         const AnyFunctionType::Param &synthParam = param.second;
+         argsWithLabels.insert(argsWithLabels.begin() + *completionIdx + result.first,
+           synthesizeArgumentFrom(cs, synthParam, locator, param.first, newArgIdx));
+       }
+       auto type1 = FunctionType::get(argsWithLabels, cs.getASTContext().TheAnyType);
+       auto type2 = FunctionType::get(params, cs.getASTContext().TheAnyType);
+       constraints.push_back(Constraint::create(cs, ConstraintKind::ApplicableFunction, type1,
+                          type2, cs.getConstraintLocator(locator.withPathElement(LocatorPathElt::ApplyFunction()))));
+        
+      }
+      cs.addDisjunctionConstraint(constraints, locator);
+      return cs.getTypeMatchAmbiguous();
+    }
+  }
 
   // Special case when a single tuple argument if used
   // instead of N distinct arguments e.g.:
@@ -970,7 +1256,6 @@ ConstraintSystem::TypeMatchResult constraints::matchCallArguments(
   }
 
   // Match up the call arguments to the parameters.
-  SmallVector<ParamBinding, 4> parameterBindings;
   {
     ArgumentFailureTracker listener(cs, argsWithLabels, params,
                                     parameterBindings, locator);
@@ -6560,6 +6845,14 @@ Type ConstraintSystem::simplifyAppliedOverloads(
 
   // Always work on the representation.
   fnTypeVar = getRepresentative(fnTypeVar);
+
+  if (llvm::find_if(argFnType->getParams(), [](AnyFunctionType::Param Arg) {
+    if (auto TVT = Arg.getPlainType()->getAs<TypeVariableType>())
+      return TVT->getImpl().isCompletion();
+    return false;
+  }) != argFnType->getParams().end()) {
+      return fnType;
+  }
 
   // Dig out the disjunction that describes this overload.
   unsigned numOptionalUnwraps = 0;

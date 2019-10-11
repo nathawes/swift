@@ -990,7 +990,7 @@ bool TypeVariableBinding::attempt(ConstraintSystem &cs) const {
     //
     // func foo<T: BinaryInteger>(_: T) {}
     // foo(.bar) <- Since `.bar` can't be inferred due to
-    //              luck of information about its base type,
+    //              lack of information about its base type,
     //              it's member type is going to get defaulted
     //              to `Any` which has to be propaged to type
     //              variable associated with `T` and vice versa.

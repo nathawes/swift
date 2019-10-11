@@ -70,8 +70,11 @@ namespace constraints {
 /// A handle that holds the saved state of a type variable, which
 /// can be restored.
 class SavedTypeVariableBinding {
-  /// The type variable and type variable options.
-  llvm::PointerIntPair<TypeVariableType *, 4> TypeVarAndOptions;
+  /// The type variable.
+  TypeVariableType *TypeVar;
+
+  /// The type variable options.
+  unsigned Options;
   
   /// The parent or fixed type.
   llvm::PointerUnion<TypeVariableType *, TypeBase *> ParentOrFixed;
@@ -82,8 +85,8 @@ public:
   /// Restore the state of the type variable to the saved state.
   void restore();
 
-  TypeVariableType *getTypeVariable() { return TypeVarAndOptions.getPointer(); }
-  unsigned getOptions() { return TypeVarAndOptions.getInt(); }
+  TypeVariableType *getTypeVariable() { return TypeVar; }
+  unsigned getOptions() { return Options; }
 };
 
 /// A set of saved type variable bindings.
@@ -171,6 +174,8 @@ enum TypeVariableOptions {
   /// Whether a more specific deduction for this type variable implies a
   /// better solution to the constraint system.
   TVO_PrefersSubtypeBinding = 0x08,
+
+  TVO_IsCompletion = 0x10,
 };
 
 /// The implementation object for a type variable used within the
@@ -241,6 +246,10 @@ public:
   /// binding.
   bool prefersSubtypeBinding() const {
     return getRawOptions() & TVO_PrefersSubtypeBinding;
+  }
+
+  bool isCompletion() const {
+    return getRawOptions() & TVO_IsCompletion;
   }
 
   /// Retrieve the corresponding node in the constraint graph.
@@ -3847,6 +3856,8 @@ using ParamBinding = SmallVector<unsigned, 1>;
 class MatchCallArgumentListener {
 public:
   virtual ~MatchCallArgumentListener();
+
+  //virtual void matchedArgument(unsigned argIdx, unsigned paramIdx);
 
   /// Indicates that the argument at the given index does not match any
   /// parameter.
