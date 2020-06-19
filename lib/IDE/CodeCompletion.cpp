@@ -1657,7 +1657,7 @@ public:
       AttTargetDK = DK;
   }
 
-  void completeDotExpr(Expr *E, SourceLoc DotLoc) override;
+  void completeDotExpr(CodeCompletionExpr *E, SourceLoc DotLoc) override;
   void completeStmtOrExpr(CodeCompletionExpr *E) override;
   void completePostfixExprBeginning(CodeCompletionExpr *E) override;
   void completeForEachSequenceBeginning(CodeCompletionExpr *E) override;
@@ -1706,6 +1706,7 @@ public:
 
 private:
   void addKeywords(CodeCompletionResultSink &Sink, bool MaybeFuncBody);
+  bool addCompletions();
   void deliverCompletionResults();
 };
 } // end anonymous namespace
@@ -2037,8 +2038,8 @@ public:
     HaveLParen = Value;
   }
 
-  void setIsSuperRefExpr() {
-    IsSuperRefExpr = true;
+  void setIsSuperRefExpr(bool Value = true) {
+    IsSuperRefExpr = Value;
   }
 
   void setIsSelfRefExpr(bool value) { IsSelfRefExpr = value; }
@@ -2052,8 +2053,8 @@ public:
     IsAfterSwiftKeyPathRoot = onRoot;
   }
 
-  void setIsDynamicLookup() {
-    IsDynamicLookup = true;
+  void setIsDynamicLookup(bool Value = true) {
+    IsDynamicLookup = Value;
   }
 
   void setPreferFunctionReferencesToCalls() {
@@ -5136,7 +5137,7 @@ static void addSelectorModifierKeywords(CodeCompletionResultSink &sink) {
   addKeyword("setter", CodeCompletionKeywordKind::None);
 }
 
-void CodeCompletionCallbacksImpl::completeDotExpr(Expr *E, SourceLoc DotLoc) {
+void CodeCompletionCallbacksImpl::completeDotExpr(CodeCompletionExpr *E, SourceLoc DotLoc) {
   assert(P.Tok.is(tok::code_complete));
 
   // Don't produce any results in an enum element.
@@ -5149,9 +5150,10 @@ void CodeCompletionCallbacksImpl::completeDotExpr(Expr *E, SourceLoc DotLoc) {
     CompleteExprSelectorContext = ParseExprSelectorContext;
   }
 
-  ParsedExpr = E;
+  ParsedExpr = E->getBase();
   this->DotLoc = DotLoc;
   CurDeclContext = P.CurDeclContext;
+  CodeCompleteTokenExpr = E;
 }
 
 void CodeCompletionCallbacksImpl::completeStmtOrExpr(CodeCompletionExpr *E) {
@@ -5778,8 +5780,79 @@ static void addConditionalCompilationFlags(ASTContext &Ctx,
   }
 }
 
+
+void DotExprLookup::
+performAndAddTo(ide::CodeCompletionContext &CompletionCtx) const {
+
+  ASTContext &Ctx = DC->getASTContext();
+  CompletionLookup Lookup(CompletionCtx.getResultSink(), Ctx, DC,
+                          &CompletionCtx);
+  if (DotLoc.isValid())
+    Lookup.setHaveDot(DotLoc);
+
+  Expr *BaseExpr = CompletionExpr->getBase();
+  Lookup.setIsSuperRefExpr(isa<SuperRefExpr>(BaseExpr));
+
+  if (auto *DRE = dyn_cast<DeclRefExpr>(BaseExpr))
+    Lookup.setIsSelfRefExpr(DRE->getDecl()->getName() == Ctx.Id_self);
+
+  for (auto &Solution: Solutions) {
+    Lookup.setIsStaticMetatype(Solution.BaseIsStaticMetaType);
+    Lookup.getPostfixKeywordCompletions(Solution.Ty, BaseExpr);
+    Lookup.setExpectedTypes(Solution.ExpectedTypes, true);
+    Lookup.getValueExprCompletions(Solution.Ty, Solution.ReferencedDecl);
+  }
+
+  // FIXME: There may be multiple of these now.
+  CompletionCtx.typeContextKind = Lookup.typeContextKind();
+}
+
+bool CodeCompletionCallbacksImpl::addCompletions() {
+  CompletionContext.CodeCompletionKind = Kind;
+
+  if (Kind == CompletionKind::None)
+    return true;
+
+  bool MaybeFuncBody = true;
+  if (CurDeclContext) {
+    auto *CD = CurDeclContext->getLocalContext();
+    if (!CD || CD->getContextKind() == DeclContextKind::Initializer ||
+        CD->getContextKind() == DeclContextKind::TopLevelCodeDecl)
+      MaybeFuncBody = false;
+  }
+
+  if (auto *DC = dyn_cast_or_null<DeclContext>(ParsedDecl)) {
+    if (DC->isChildContextOf(CurDeclContext))
+      CurDeclContext = DC;
+  }
+
+  assert(ParsedExpr || CurDeclContext);
+
+  SourceLoc CompletionLoc = ParsedExpr
+    ? ParsedExpr->getLoc()
+    : CurDeclContext->getASTContext().SourceMgr.getCodeCompletionLoc();
+
+  switch (Kind) {
+  case CompletionKind::DotExpr: {
+    assert(CodeCompleteTokenExpr);
+
+    auto Lookup = swift::completeDotExpr(CompletionLoc, DotLoc,
+                                         CodeCompleteTokenExpr, CurDeclContext);
+    Lookup.performAndAddTo(CompletionContext);
+    addKeywords(CompletionContext.getResultSink(), MaybeFuncBody);
+    deliverCompletionResults();
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
 void CodeCompletionCallbacksImpl::doneParsing() {
   CompletionContext.CodeCompletionKind = Kind;
+
+  if (addCompletions())
+    return;
 
   if (Kind == CompletionKind::None) {
     return;

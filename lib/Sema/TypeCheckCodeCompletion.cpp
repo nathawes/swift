@@ -689,3 +689,129 @@ LookupResult
 swift::lookupSemanticMember(DeclContext *DC, Type ty, DeclName name) {
   return TypeChecker::lookupMember(DC, ty, DeclNameRef(name), None);
 }
+
+//===----------------------------------------------------------------------===//
+// typeCheckContextAt(DeclContext, SourceLoc)
+//===----------------------------------------------------------------------===//
+
+namespace {
+void typeCheckContextImpl(DeclContext *DC, SourceLoc Loc,
+                          Optional<llvm::function_ref<void(const constraints::Solution &)>> SolutionCallback) {
+  // Nothing to type check in module context.
+  if (DC->isModuleScopeContext())
+    return;
+
+  typeCheckContextImpl(DC->getParent(), Loc, SolutionCallback);
+
+  // Type-check this context.
+  switch (DC->getContextKind()) {
+  case DeclContextKind::AbstractClosureExpr:
+  case DeclContextKind::Module:
+  case DeclContextKind::SerializedLocal:
+  case DeclContextKind::TopLevelCodeDecl:
+  case DeclContextKind::EnumElementDecl:
+  case DeclContextKind::GenericTypeDecl:
+  case DeclContextKind::SubscriptDecl:
+    // Nothing to do for these.
+    break;
+
+  case DeclContextKind::Initializer:
+    if (auto *patternInit = dyn_cast<PatternBindingInitializer>(DC)) {
+      if (auto *PBD = patternInit->getBinding()) {
+        auto i = patternInit->getBindingIndex();
+        PBD->getPattern(i)->forEachVariable(
+            [](VarDecl *VD) { (void)VD->getInterfaceType(); });
+        if (PBD->getInit(i)) {
+          if (!PBD->isInitializerChecked(i))
+            typeCheckPatternBinding(PBD, i);
+        }
+      }
+    }
+    break;
+
+  case DeclContextKind::AbstractFunctionDecl: {
+    auto *AFD = cast<AbstractFunctionDecl>(DC);
+    auto &SM = DC->getASTContext().SourceMgr;
+    auto bodyRange = AFD->getBodySourceRange();
+    if (SM.rangeContainsTokenLoc(bodyRange, Loc)) {
+      swift::typeCheckAbstractFunctionBodyAtLoc(AFD, Loc, SolutionCallback);
+    } else {
+      assert(bodyRange.isInvalid() && "The body should not be parsed if the "
+                                      "completion happens in the signature");
+    }
+    break;
+  }
+
+  case DeclContextKind::ExtensionDecl:
+    // Make sure the extension has been bound, in case it is in an
+    // inactive #if or something weird like that.
+    cast<ExtensionDecl>(DC)->computeExtendedNominal();
+    break;
+
+  case DeclContextKind::FileUnit:
+    llvm_unreachable("module scope context handled above");
+  }
+}
+} // anonymous namespace
+
+void swift::typeCheckContextAt(DeclContext *DC, SourceLoc Loc) {
+  while (isa<AbstractClosureExpr>(DC))
+    DC = DC->getParent();
+
+  if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(DC)) {
+    typeCheckTopLevelCodeDecl(TLCD);
+  } else {
+    typeCheckContextImpl(DC, Loc, None);
+  }
+}
+
+
+DotExprLookup
+swift::completeDotExpr(SourceLoc CompletionLoc, SourceLoc DotLoc,
+                       CodeCompletionExpr *CompExpr, DeclContext *DC) {
+  while (isa<AbstractClosureExpr>(DC))
+    DC = DC->getParent();
+
+  Optional<llvm::function_ref<void(const constraints::Solution &)>> Extractor;
+
+  DotExprLookup LookupInfo(DotLoc, DC, CompExpr);
+  llvm::DenseMap<std::pair<Type, Decl*>, size_t> Results;
+  Extractor = [&](const constraints::Solution &Result) {
+    auto &CS = Result.getConstraintSystem();
+
+    auto GetType = [&](Expr *E) {
+      return Result.simplifyType(Result.getType(E));
+    };
+
+    auto *ParsedExpr = CompExpr->getBase();
+    auto *SemanticExpr = ParsedExpr->getSemanticsProvidingExpr();
+
+    if (Type BaseTy = GetType(ParsedExpr)) {
+      auto *Locator = CS.getConstraintLocator(SemanticExpr);
+      Type ExpectedTy = GetType(CompExpr);
+      if (!CS.getParentExpr(CompExpr))
+        ExpectedTy = CS.getContextualType(CompExpr);
+
+      auto *CalleeLocator = Result.getCalleeLocator(Locator);
+      ValueDecl *ReferencedDecl = nullptr;
+      if (auto SelectedOverload = Result.getOverloadChoiceIfAvailable(CalleeLocator))
+        ReferencedDecl = SelectedOverload->choice.getDeclOrNull();
+
+      bool ISDMT = CS.isStaticallyDerivedMetatype(ParsedExpr);
+      auto Key = std::make_pair(BaseTy, ReferencedDecl);
+      auto Ret = Results.insert({Key, LookupInfo.Solutions.size()});
+      if (!Ret.second && ExpectedTy)
+        LookupInfo.Solutions[Ret.first->getSecond()].ExpectedTypes.push_back(ExpectedTy);
+      else
+        LookupInfo.Solutions.push_back({BaseTy, ReferencedDecl, {ExpectedTy}, ISDMT});
+    }
+  };
+
+  if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(DC)) {
+    typeCheckTopLevelCodeDecl(TLCD);
+  } else {
+    typeCheckContextImpl(DC, CompletionLoc, Extractor);
+  }
+
+  return LookupInfo;
+}

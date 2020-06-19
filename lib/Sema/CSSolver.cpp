@@ -1403,7 +1403,7 @@ void ConstraintSystem::solveForCodeCompletion(
 
   cs.shrink(expr);
 
-  if (cs.generateConstraints(expr, DC))
+  if (!cs.generateConstraints(expr, DC))
     return;
 
   llvm::SmallVector<Solution, 4> solutions;

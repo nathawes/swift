@@ -32,6 +32,7 @@ namespace swift {
   class DeclName;
   enum class DeclRefKind;
   class Expr;
+  class CodeCompletionExpr;
   class ExtensionDecl;
   class FunctionType;
   class LookupResult;
@@ -44,6 +45,13 @@ namespace swift {
   class Type;
   class ValueDecl;
   struct PrintOptions;
+
+  namespace constraints {
+    class Solution;
+  }
+  namespace ide {
+    class CodeCompletionContext;
+  }
 
   /// Typecheck binding initializer at \p bindingIndex.
   void typeCheckPatternBinding(PatternBindingDecl *PBD, unsigned bindingIndex);
@@ -134,12 +142,45 @@ namespace swift {
 
   /// Type check a function body element which is at \p TagetLoc .
   bool typeCheckAbstractFunctionBodyAtLoc(AbstractFunctionDecl *AFD,
-                                          SourceLoc TargetLoc);
+                                          SourceLoc TargetLoc,
+                                          Optional<llvm::function_ref<void(const constraints::Solution &)>> CompletionCallback);
+
+  /// Type check parent contexts of the given decl context, and the body of the
+  /// given context until \c Loc if the context is a function body.
+  void typeCheckContextAt(DeclContext *DC, SourceLoc Loc);
 
   /// Typecheck top-level code parsed during code completion.
   ///
   /// \returns true on success, false on error.
   bool typeCheckTopLevelCodeDecl(TopLevelCodeDecl *TLCD);
+
+  class DotExprLookup {
+    SourceLoc DotLoc;
+    DeclContext *DC;
+    CodeCompletionExpr *CompletionExpr;
+
+    struct SolutionInfo {
+      Type Ty;
+      ValueDecl* ReferencedDecl;
+      SmallVector<Type, 4> ExpectedTypes;
+      bool BaseIsStaticMetaType;
+    };
+    SmallVector<SolutionInfo, 4> Solutions;
+
+    DotExprLookup(SourceLoc DotLoc, DeclContext *DC,
+                  CodeCompletionExpr *CompletionExpr)
+      : DotLoc(DotLoc), DC(DC), CompletionExpr(CompletionExpr) {}
+
+  public:
+    void performAndAddTo(ide::CodeCompletionContext &CompletionCtx) const;
+    bool isEmpty() const { return Solutions.empty(); }
+
+    friend DotExprLookup completeDotExpr(SourceLoc, SourceLoc, CodeCompletionExpr*, DeclContext*);
+  };
+
+  DotExprLookup
+  completeDotExpr(SourceLoc CompletionLoc, SourceLoc DotLoc,
+                  CodeCompletionExpr *Expr, DeclContext *DC);
 
   LookupResult
   lookupSemanticMember(DeclContext *DC, Type ty, DeclName name);

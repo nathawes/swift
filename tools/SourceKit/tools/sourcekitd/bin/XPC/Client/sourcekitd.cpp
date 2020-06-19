@@ -129,7 +129,7 @@ sourcekitd_response_t sourcekitd_send_request_sync(sourcekitd_object_t req) {
   xpc_dictionary_set_value(msg, "msg", contents);
   xpc_release(contents);
 
-  xpc_object_t reply = xpc_connection_send_message_with_reply_sync(Conn, msg);
+  xpc_object_t reply = xpc_connection_send_message_with_reply_sync(Conn, msg); // crashing line
   xpc_release(msg);
   if (xpc_get_type(reply) == XPC_TYPE_ERROR)
     return reply;

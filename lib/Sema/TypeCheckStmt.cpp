@@ -39,6 +39,7 @@
 #include "swift/Basic/TopCollection.h"
 #include "swift/Parse/Lexer.h"
 #include "swift/Parse/LocalContext.h"
+#include "swift/Sema/IDETypeChecking.h"
 #include "swift/Syntax/TokenKinds.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
@@ -319,6 +320,7 @@ public:
   FallthroughStmt /*nullable*/ *PreviousFallthrough = nullptr;
 
   SourceLoc TargetTypeCheckLoc;
+  Optional<llvm::function_ref<void(const swift::constraints::Solution &)>> CompletionCallback;
 
   /// Used to distinguish the first BraceStmt that starts a TopLevelCodeDecl.
   bool IsBraceStmtFromTopLevelDecl;
@@ -515,6 +517,11 @@ public:
       }
     }
 
+    if (CompletionCallback) {
+      TypeChecker::typeCheckForCodeCompletion(E, DC, ResultTy, ctp,
+                                              *CompletionCallback);
+      return RS;
+    }
     auto exprTy = TypeChecker::typeCheckExpression(E, DC,
                                                    ResultTy,
                                                    ctp, options);
@@ -1583,6 +1590,11 @@ Stmt *StmtChecker::visitBraceStmt(BraceStmt *BS) {
         options |= TypeCheckExprFlags::AllowUnresolvedTypeVariables;
       }
 
+      if (CompletionCallback) {
+        TypeChecker::typeCheckForCodeCompletion(SubExpr, DC, Type(), CTP_Unused,
+                                                *CompletionCallback);
+        continue;
+      }
       auto resultTy =
           TypeChecker::typeCheckExpression(SubExpr, DC, Type(),
                                            CTP_Unused, options);
@@ -1835,10 +1847,11 @@ static void checkClassConstructorBody(ClassDecl *classDecl,
   }
 }
 
-bool TypeCheckFunctionBodyAtLocRequest::evaluate(Evaluator &evaluator,
-                                                 AbstractFunctionDecl *AFD,
-                                                 SourceLoc Loc) const {
+bool swift::typeCheckAbstractFunctionBodyAtLoc(AbstractFunctionDecl *AFD,
+                                               SourceLoc TargetLoc,
+                                               Optional<llvm::function_ref<void(const constraints::Solution &)>> CompletionCallback) {
   ASTContext &ctx = AFD->getASTContext();
+  DiagnosticSuppression suppression(ctx.Diags);
 
   BraceStmt *body = AFD->getBody();
   if (!body || AFD->isBodyTypeChecked())
@@ -1861,7 +1874,8 @@ bool TypeCheckFunctionBodyAtLocRequest::evaluate(Evaluator &evaluator,
     ASTScope::expandFunctionBody(AFD);
 
   StmtChecker SC(AFD);
-  SC.TargetTypeCheckLoc = Loc;
+  SC.TargetTypeCheckLoc = TargetLoc;
+  SC.CompletionCallback = CompletionCallback;
   bool hadError = SC.typeCheckBody(body);
   AFD->setBody(body, AbstractFunctionDecl::BodyKind::TypeChecked);
   return hadError;
