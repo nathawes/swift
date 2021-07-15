@@ -5145,7 +5145,34 @@ public:
   /// \returns true to indicate that this should cause a failure, false
   /// otherwise.
   virtual bool relabelArguments(ArrayRef<Identifier> newNames);
+
+  /// Indicates that arguments after the code completion token were not valid
+  /// and ignored.
+  ///
+  /// \returns true to indicate that this should cause a failure, false
+  /// otherwise.
+  virtual bool invalidArgumentsAfterCompletion();
 };
+
+/// For a callsite containing a code completion expression, stores the index of
+/// the arg containing it along with the index of the first trailing closure.
+struct CompletionArgInfo {
+  unsigned completionIdx;
+  Optional<unsigned> firstTrailingIdx;
+  unsigned argCount;
+
+  /// \returns true  if the given argument index is possibly about to be written
+  /// by the user (given the completion index) so shouldn't be penalised as
+  /// missing when ranking solutions.
+  bool isAllowableMissingArg(unsigned argInsertIdx,
+                             AnyFunctionType::Param param);
+};
+
+/// Extracts the index of the argument containing the code completion location
+/// from the provided anchor if it's a \c CallExpr, \c SubscriptExpr, or
+///  \c ObjectLiteralExpr).
+Optional<CompletionArgInfo>
+getCompletionArgInfo(ASTNode anchor, constraints::ConstraintSystem &cs);
 
 /// Match the call arguments (as described by the given argument type) to
 /// the parameters (as described by the given parameter type).
@@ -5172,6 +5199,7 @@ matchCallArguments(
     ArrayRef<AnyFunctionType::Param> params,
     const ParameterListInfo &paramInfo,
     Optional<unsigned> unlabeledTrailingClosureIndex,
+    Optional<CompletionArgInfo> completionInfo,
     bool allowFixes,
     MatchCallArgumentListener &listener,
     Optional<TrailingClosureMatching> trailingClosureMatching);
@@ -5781,26 +5809,6 @@ bool parameterRequiresArgument(
     ArrayRef<AnyFunctionType::Param> params,
     const ParameterListInfo &paramInfo,
     unsigned paramIdx);
-
-/// For a callsite containing a code completion expression, stores the index of
-/// the arg containing it along with the index of the first trailing closure.
-struct CompletionArgInfo {
-  unsigned completionIdx;
-  Optional<unsigned> firstTrailingIdx;
-  unsigned argCount;
-
-  /// \returns true  if the given argument index is possibly about to be written
-  /// by the user (given the completion index) so shouldn't be penalised as
-  /// missing when ranking solutions.
-  bool isAllowableMissingArg(unsigned argInsertIdx,
-                             AnyFunctionType::Param param);
-};
-
-/// Extracts the index of the argument containing the code completion location
-/// from the provided anchor if it's a \c CallExpr, \c SubscriptExpr, or
-///  \c ObjectLiteralExpr).
-Optional<CompletionArgInfo>
-getCompletionArgInfo(ASTNode anchor, constraints::ConstraintSystem &cs);
 
 } // end namespace swift
 

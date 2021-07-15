@@ -1420,7 +1420,9 @@ sawSolution(const constraints::Solution &S) {
       if (j == ArgIdx) {
         assert(!ParamIdx);
         ParamIdx = i;
-        IsNoninitialVariadic = Bindings[i].size() > 1;
+        IsNoninitialVariadic = llvm::any_of(Bindings[i], [j](unsigned other) {
+          return other < j;
+        });
       }
       // Synthesized args don't count.
       if (j < ArgInfo->argCount)
@@ -1447,6 +1449,24 @@ sawSolution(const constraints::Solution &S) {
   Expr *Arg = CS.getParentExpr(CompletionExpr);
   if (TupleExpr *TE = dyn_cast<TupleExpr>(Arg))
     HasLabel = !TE->getElementName(ArgIdx).empty();
+
+  // If this is a duplicate of any other result, ignore this solution.
+  if (llvm::any_of(Results, [&](const Result &R) {
+    if (R.FuncD != FuncD)
+      return false;
+    if (!R.FuncTy->isEqual(FuncTy))
+      return false;
+    if (R.BaseType) {
+      if (!BaseTy || !BaseTy->isEqual(R.BaseType))
+        return false;
+    } else if (BaseTy) {
+      return false;
+    }
+    return R.ParamIdx == ParamIdx &&
+        R.IsNoninitialVariadic == IsNoninitialVariadic;
+  })) {
+    return;
+  }
 
   Results.push_back({ExpectedTy, ParentCall, FuncD, FuncTy, ArgIdx, ParamIdx,
       std::move(ClaimedParams), IsNoninitialVariadic, BaseTy, HasLabel});

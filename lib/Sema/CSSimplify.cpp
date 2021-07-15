@@ -41,6 +41,8 @@ MatchCallArgumentListener::~MatchCallArgumentListener() { }
 
 bool MatchCallArgumentListener::extraArgument(unsigned argIdx) { return true; }
 
+bool MatchCallArgumentListener::invalidArgumentsAfterCompletion() { return true; }
+
 Optional<unsigned>
 MatchCallArgumentListener::missingArgument(unsigned paramIdx,
                                            unsigned argInsertIdx) {
@@ -166,8 +168,8 @@ static bool areConservativelyCompatibleArgumentLabels(
 
   return matchCallArguments(args, params, paramInfo,
                             unlabeledTrailingClosureArgIndex,
-                            /*allow fixes*/ false, listener,
-                            None).hasValue();
+                            /*completionInfo*/None, /*allow fixes*/ false,
+                            listener, None).hasValue();
 }
 
 Expr *constraints::getArgumentLabelTargetExpr(Expr *fn) {
@@ -252,11 +254,28 @@ static bool anyParameterRequiresArgument(
   return false;
 }
 
+static bool isCodeCompletionTypeVar(Type type) {
+  if (auto *TVT = type->getAs<TypeVariableType>()) {
+    if (TVT->getImpl().isCodeCompletionToken())
+      return true;
+  }
+  return false;
+}
+
+static bool
+isAfterCompletionToken(Optional<CompletionArgInfo> info, unsigned argIdx) {
+  if (!info)
+    return false;
+  return argIdx > info->completionIdx;
+}
+
+
 static bool matchCallArgumentsImpl(
     SmallVectorImpl<AnyFunctionType::Param> &args,
     ArrayRef<AnyFunctionType::Param> params,
     const ParameterListInfo &paramInfo,
     Optional<unsigned> unlabeledTrailingClosureArgIndex,
+    Optional<CompletionArgInfo> completionInfo,
     bool allowFixes,
     TrailingClosureMatching trailingClosureMatching,
     MatchCallArgumentListener &listener,
@@ -343,13 +362,10 @@ static bool matchCallArgumentsImpl(
     // the new solver-based code completion (to avoid affecting the AST used by
     // unmigrated completion kinds) claim it without complaining about the
     // missing label. Completion will suggest the label in such cases.
-    if (nextArgIdx < numArgs && args[nextArgIdx].getLabel().empty()) {
-      Type nextArgTy = args[nextArgIdx].getPlainType();
-      if (auto *TVT = nextArgTy->getAs<TypeVariableType>()) {
-        if (TVT->getImpl().isCodeCompletionToken() &&
-            TVT->getASTContext().CompletionCallback)
-          return claim(paramLabel, nextArgIdx, /*ignoreNameMismatch*/true);
-      }
+    if (completionInfo && nextArgIdx < numArgs &&
+        args[nextArgIdx].getLabel().empty()) {
+      if (isCodeCompletionTypeVar(args[nextArgIdx].getPlainType()))
+        return claim(paramLabel, nextArgIdx, /*ignoreNameMismatch*/true);
     }
 
     // Go hunting for an unclaimed argument whose name does match.
@@ -394,6 +410,14 @@ static bool matchCallArgumentsImpl(
         if (argLabel.empty())
           continue;
 
+        // We don't allow out-of-order matching beyond the completion location.
+        // Arguments after the completion position must all be valid for any to
+        // be bound. If any are invalid we ignore all of them, proceeding as if
+        // the completion was the last argument, as the user may be re-writing
+        // the callsite rather than updating an argument in an existing one.
+        if (isAfterCompletionToken(completionInfo, i))
+          continue;
+
         potentiallyOutOfOrder = true;
       }
 
@@ -403,6 +427,13 @@ static bool matchCallArgumentsImpl(
 
     // If we're not supposed to attempt any fixes, we're done.
     if (!allowFixes)
+      return None;
+
+    // Also don't attempt any fixes if this argument is after the completion
+    // position. Arguments after the completion position must all be valid to
+    // be considered. If any are invalid we ignore them, as the user may be
+    // re-writing the callsite rather than updating an argument.
+    if (isAfterCompletionToken(completionInfo, nextArgIdx))
       return None;
 
     // Several things could have gone wrong here, and we'll check for each
@@ -602,6 +633,12 @@ static bool matchCallArgumentsImpl(
     llvm::SmallVector<unsigned, 4> unclaimedNamedArgs;
     for (auto argIdx : indices(args)) {
       if (claimedArgs[argIdx]) continue;
+
+      // We don't allow arguments after the completion position to be claimed
+      // during recovery, so skip them.
+      if (isAfterCompletionToken(completionInfo, argIdx))
+        continue;
+
       if (!args[argIdx].getLabel().empty())
         unclaimedNamedArgs.push_back(argIdx);
     }
@@ -678,6 +715,12 @@ static bool matchCallArgumentsImpl(
           continue;
 
         bindNextParameter(paramIdx, nextArgIdx, true);
+
+        // Don't allow arguments after the completion position to be claimed
+        // during recovery. We ignore them if they are invalid, as the user may
+        // may be re-writing the callsite rather than updating an argument.
+        if (isAfterCompletionToken(completionInfo, nextArgIdx))
+          break;
       }
     }
 
@@ -691,10 +734,16 @@ static bool matchCallArgumentsImpl(
           continue;
 
         // If parameter has a default value, we don't really
-        // now if label doesn't match because it's incorrect
+        // know if label doesn't match because it's incorrect
         // or argument belongs to some other parameter, so
         // we just leave this parameter unfulfilled.
         if (paramInfo.hasDefaultArgument(i))
+          continue;
+
+        // Don't allow arguments after the completion position to be claimed
+        // during recovery. We ignore them if they are invalid, as the user may
+        // may be re-writing the callsite rather than updating an argument.
+        if (isAfterCompletionToken(completionInfo, i))
           continue;
 
         // Looks like there was no parameter claimed at the same
@@ -707,11 +756,69 @@ static bool matchCallArgumentsImpl(
     // If we still haven't claimed all of the arguments,
     // fail if there is no recovery.
     if (numClaimedArgs != numArgs) {
+      bool unclaimedArgAfterCompletion = false;
       for (auto index : indices(claimedArgs)) {
         if (claimedArgs[index])
           continue;
 
+        // Avoid reporting individual extra arguments after the completion
+        // position. They are reported via a single callback below.
+        if (isAfterCompletionToken(completionInfo, index)) {
+          unclaimedArgAfterCompletion = true;
+          continue;
+        }
+
         if (listener.extraArgument(index))
+          return true;
+      }
+
+      if (completionInfo && unclaimedArgAfterCompletion) {
+        // There were invalid arguments after the completion position. The
+        // user may be intending to rewrite the callsite (rather than update an
+        // argument) so proceed as if all arguments after the completion
+        // position (even those already bound) weren't present. This prevents
+        // this solution being penalized based on the exact number and kind
+        // of issues those arguments contain.
+        unsigned afterIdx = completionInfo->completionIdx + 1;
+
+        auto argsBegin = args.begin() + afterIdx;
+        if (argsBegin != args.end())
+          args.erase(argsBegin, args.end());
+        numArgs = args.size();
+
+        if (!actualArgNames.empty()) {
+          auto actualNamesBegin = actualArgNames.begin() + afterIdx;
+          if (actualNamesBegin != actualArgNames.end())
+            actualArgNames.erase(actualNamesBegin, actualArgNames.end());
+        }
+
+        auto claimedBegin = claimedArgs.begin() + afterIdx;
+        if (claimedBegin != claimedArgs.end())
+          claimedArgs.erase(claimedBegin, claimedArgs.end());
+        numClaimedArgs = llvm::count_if(claimedArgs, [](bool claimed){
+          return claimed;
+        });
+
+        for (auto &params: llvm::reverse(parameterBindings)) {
+          if (params.empty())
+            continue;
+          if (!isAfterCompletionToken(completionInfo, params.back()))
+            break;
+          if (isAfterCompletionToken(completionInfo, params.front())) {
+            params.clear();
+            haveUnfulfilledParams = true;
+          } else {
+            llvm::erase_if(params, [&](unsigned argIdx) {
+              return isAfterCompletionToken(completionInfo, argIdx);
+            });
+          }
+        }
+
+        // Report that post-completion args where ignored. This allows us to
+        // rank overloads that didn't require dropping the args higher, while
+        // still treating all overloads that did equally, regardless of how
+        // many args were dropped or what issues they would otherwise trigger.
+        if (listener.invalidArgumentsAfterCompletion())
           return true;
       }
     }
@@ -843,6 +950,12 @@ static bool matchCallArgumentsImpl(
           // - The argument is unnamed, in which case we try to fix the
           //   problem by adding the name.
           } else if (argumentLabel.empty()) {
+            // If the argument is the code completion token, the label will be
+            // offered in the completion results, so it shouldn't be considered
+            // missing.
+            Type argTy = args[fromArgIdx].getPlainType();
+            if (completionInfo && isCodeCompletionTypeVar(argTy))
+              continue;
             hadLabelMismatch = true;
             if (listener.missingLabel(paramIdx))
               return true;
@@ -941,6 +1054,7 @@ constraints::matchCallArguments(
     ArrayRef<AnyFunctionType::Param> params,
     const ParameterListInfo &paramInfo,
     Optional<unsigned> unlabeledTrailingClosureArgIndex,
+    Optional<CompletionArgInfo> completionInfo,
     bool allowFixes,
     MatchCallArgumentListener &listener,
     Optional<TrailingClosureMatching> trailingClosureMatching) {
@@ -952,7 +1066,7 @@ constraints::matchCallArguments(
     SmallVector<ParamBinding, 4> paramBindings;
     if (matchCallArgumentsImpl(
             args, params, paramInfo, unlabeledTrailingClosureArgIndex,
-            allowFixes, scanDirection, listener, paramBindings))
+            completionInfo, allowFixes, scanDirection, listener, paramBindings))
       return None;
 
     return MatchCallArgumentResult{
@@ -974,14 +1088,16 @@ constraints::matchCallArguments(
   // Try the forward direction first.
   SmallVector<ParamBinding, 4> forwardParamBindings;
   bool forwardFailed = matchCallArgumentsImpl(
-      args, params, paramInfo, unlabeledTrailingClosureArgIndex, allowFixes,
-      TrailingClosureMatching::Forward, noOpListener, forwardParamBindings);
+      args, params, paramInfo, unlabeledTrailingClosureArgIndex, completionInfo,
+      allowFixes, TrailingClosureMatching::Forward, noOpListener,
+      forwardParamBindings);
 
   // Try the backward direction.
   SmallVector<ParamBinding, 4> backwardParamBindings;
   bool backwardFailed = matchCallArgumentsImpl(
-      args, params, paramInfo, unlabeledTrailingClosureArgIndex, allowFixes,
-      TrailingClosureMatching::Backward, noOpListener, backwardParamBindings);
+      args, params, paramInfo, unlabeledTrailingClosureArgIndex, completionInfo,
+      allowFixes, TrailingClosureMatching::Backward, noOpListener,
+      backwardParamBindings);
 
   // If at least one of them failed, or they produced the same results, run
   // call argument matching again with the real visitor.
@@ -1028,7 +1144,7 @@ bool CompletionArgInfo::isAllowableMissingArg(unsigned argInsertIdx,
 }
 
 Optional<CompletionArgInfo>
-swift::getCompletionArgInfo(ASTNode anchor, ConstraintSystem &CS) {
+constraints::getCompletionArgInfo(ASTNode anchor, ConstraintSystem &CS) {
   Expr *arg = nullptr;
   if (auto *CE = getAsExpr<CallExpr>(anchor))
     arg = CE->getArg();
@@ -1126,6 +1242,15 @@ public:
       return true;
 
     ExtraArguments.push_back(std::make_pair(argIdx, Arguments[argIdx]));
+    return false;
+  }
+
+  bool invalidArgumentsAfterCompletion() override {
+    assert(CS.isForCodeCompletion());
+    // This is only triggered when solving for code completion (which doesn't
+    // produce diagnostics) so no need to record a fix for this. Still increase
+    // the score to penalize this solution though.
+    CS.increaseScore(SK_Fix);
     return false;
   }
 
@@ -1329,9 +1454,12 @@ ConstraintSystem::TypeMatchResult constraints::matchCallArguments(
 
   {
     ArgumentFailureTracker listener(cs, argsWithLabels, params, locator);
+    Optional<CompletionArgInfo> completionInfo = None;
+    if (cs.isForCodeCompletion())
+      completionInfo = getCompletionArgInfo(locator.getAnchor(), cs);
     auto callArgumentMatch = constraints::matchCallArguments(
         argsWithLabels, params, paramInfo,
-        argInfo->UnlabeledTrailingClosureIndex,
+        argInfo->UnlabeledTrailingClosureIndex, completionInfo,
         cs.shouldAttemptFixes(), listener, trailingClosureMatching);
     if (!callArgumentMatch)
       return cs.getTypeMatchFailure(locator);
@@ -11535,6 +11663,36 @@ ConstraintSystem::SolutionKind ConstraintSystem::simplifyFixConstraint(
   }
 
   case FixKind::AllowArgumentTypeMismatch: {
+    // If this is after the code completion location, give a fixed penalty
+    // with the same impact as that for the fix to ignore arguments after the
+    // completion position when matching arguments.
+    if (isForCodeCompletion()) {
+      auto getArgIndex = [&](ConstraintLocator *loc) -> Optional<unsigned> {
+        if (auto component = loc->findLast<LocatorPathElt::ApplyArgToParam>())
+          return component->getArgIdx();
+        return None;
+      };
+      auto completionInfo = getCompletionArgInfo(locator.getAnchor(), *this);
+      auto argIdx = getArgIndex(getConstraintLocator(locator));
+      if (argIdx && isAfterCompletionToken(completionInfo, *argIdx)) {
+        // Make sure we only penalize argument mismatches after the completion
+        // position once.
+        bool isFirst = llvm::all_of(getFixes(), [&](const ConstraintFix *fix) {
+          auto *fixLocator = fix->getLocator();
+          if (fixLocator->getAnchor() != locator.getAnchor())
+            return true;
+          if (auto fixArgIdx = getArgIndex(fixLocator))
+            return *fixArgIdx <= completionInfo->completionIdx ||
+                fixArgIdx > argIdx;
+          return true;
+        });
+
+        if (isFirst)
+          return recordFix(fix, 1) ? SolutionKind::Error : SolutionKind::Solved;
+        return SolutionKind::Solved;
+      }
+    }
+
     auto impact = 2;
     // If there are any other argument mismatches already detected for this
     // call, we increase the score even higher so more argument fixes means

@@ -6748,18 +6748,17 @@ static bool addPossibleParams(
       break;
 
     const AnyFunctionType::Param *P = &ParamsToPass[Idx];
-    bool Defaulted = PL->get(Idx)->isDefaultArgument() || PL->get(Idx)->isVariadic();
-    PossibleParamInfo PP(P, Defaulted);
-    if (llvm::any_of(Params, [&](PossibleParamInfo &Existing){ return PP == Existing; }))
-      continue;
+    bool Required = !PL->get(Idx)->isDefaultArgument() && !PL->get(Idx)->isVariadic();
 
     if (P->hasLabel() && !(IsCompletion && Ret.IsNoninitialVariadic)) {
-      Params.push_back(std::move(PP));
+      PossibleParamInfo PP(P, Required);
+      if (!llvm::any_of(Params, [&](PossibleParamInfo &Existing){ return PP == Existing; }))
+        Params.push_back(std::move(PP));
     } else {
       showGlobalCompletions = true;
       Types.push_back(P->getPlainType());
     }
-    if (!Defaulted)
+    if (Required)
       break;
   }
   return showGlobalCompletions;

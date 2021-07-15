@@ -1000,3 +1000,86 @@ struct Rdar77867723 {
 // OVERLOAD_LABEL2: End completions
   }
 }
+
+func testArgsAfterCompletion() {
+  enum A { case a }
+  enum B { case b }
+
+  let localA = A.a
+  let localB = B.b
+
+  func overloaded(x: Int, _ first: A, _ second: B) {}
+  func overloaded(x: Int, _ first: B, _ second: A) {}
+
+  overloaded(x: 1, .#^VALID_UNRESOLVED^#, localB)
+
+  // VALID_UNRESOLVED: Begin completions, 2 items
+  // VALID_UNRESOLVED-DAG: Decl[EnumElement]/CurrNominal/Flair[ExprSpecific]/TypeRelation[Identical]: a[#A#]; name=a
+  // VALID_UNRESOLVED-DAG: Decl[InstanceMethod]/CurrNominal/TypeRelation[Invalid]: hash({#(self): A#})[#(into: inout Hasher) -> Void#]; name=hash(self: A)
+  // VALID_UNRESOLVED: End completions
+
+  overloaded(x: 1, #^VALID_GLOBAL^#, localB)
+  // VALID_GLOBAL: Begin completions
+  // VALID_GLOBAL-DAG: Decl[LocalVar]/Local/TypeRelation[Identical]: localA[#A#]; name=localA
+  // VALID_GLOBAL-DAG: Decl[LocalVar]/Local: localB[#B#]; name=localB
+  // VALID_GLOBAL: End completions
+
+  func overloadedLabel(x: Int, firstA: A, second: B) {}
+  func overloadedLabel(x: Int, firstB: B, second: A) {}
+
+  overloadedLabel(x: 1, #^VALID_LABEL^#, second: localB)
+  // VALID_LABEL: Begin completions, 1 items
+  // VALID_LABEL: Pattern/Local/Flair[ArgLabels]: {#firstA: A#}[#A#]; name=firstA: A
+  // VALID_LABEL: End completions
+
+  overloadedLabel(x: 1, #^INVALID_LABEL^#, wrongLabelRightType: localB)
+  // INVALID_LABEL: Begin completions, 2 items
+  // INVALID_LABEL-DAG: Pattern/Local/Flair[ArgLabels]: {#firstA: A#}[#A#]; name=firstA: A
+  // INVALID_LABEL-DAG: Pattern/Local/Flair[ArgLabels]: {#firstB: B#}[#B#]; name=firstB: B
+  // INVALID_LABEL: End completions
+
+  overloadedLabel(x: 1, #^INVALID_LABEL_TYPE?check=INVALID_LABEL^#, wrongLabelWrongType: 2) // invalid
+
+  func overloadedArity(x: Int, firstA: A, second: B, third: Double) {}
+  func overloadedArity(x: Int, firstB: B, second: A) {}
+
+  overloadedArity(x: 1, #^VALID_ARITY^#, second: localB, third: 4.5)
+  // VALID_ARITY: Begin completions, 1 items
+  // VALID_ARITY: Pattern/Local/Flair[ArgLabels]: {#firstA: A#}[#A#]; name=firstA: A
+  // VALID_ARITY: End completions
+
+  overloadedArity(x: 1, #^INVALID_ARITY^#, wrong: localB)
+  // INVALID_ARITY: Begin completions, 2 items
+  // INVALID_ARITY-DAG: Pattern/Local/Flair[ArgLabels]: {#firstA: A#}[#A#]; name=firstA: A
+  // INVALID_ARITY-DAG: Pattern/Local/Flair[ArgLabels]: {#firstB: B#}[#B#]; name=firstB: B
+  // INVALID_ARITY: End completions
+
+  // type mismatch in 'second' vs extra arg 'third'.
+  overloadedArity(x: 1, #^INVALID_ARITY_TYPE?check=INVALID_ARITY^#, second: localA, third: 2.5)
+  overloadedArity(x: 1, #^INVALID_ARITY_TYPE_2?check=INVALID_ARITY^#, second: localA, third: "wrong")
+
+  func overloadedDefaulted(x: Int, p: A) {}
+  func overloadedDefaulted(x: Int, y: A = A.a, z: A = A.a) {}
+
+  overloadedDefaulted(x: 1, #^VALID_DEFAULTED^#)
+  // VALID_DEFAULTED: Begin completions, 3 items
+  // VALID_DEFAULTED-DAG: Pattern/Local/Flair[ArgLabels]: {#p: A#}[#A#]; name=p: A
+  // VALID_DEFAULTED-DAG: Pattern/Local/Flair[ArgLabels]: {#y: A#}[#A#]; name=y: A
+  // VALID_DEFAULTED-DAG: Pattern/Local/Flair[ArgLabels]: {#z: A#}[#A#]; name=z: A
+  // VALID_DEFAULTED: End completions
+
+  overloadedDefaulted(x: 1, #^VALID_DEFAULTED_AFTER^#, z: localA)
+  // VALID_DEFAULTED_AFTER: Begin completions, 1 items
+  // VALID_DEFAULTED_AFTER-DAG: Pattern/Local/Flair[ArgLabels]: {#y: A#}[#A#]; name=y: A
+  // VALID_DEFAULTED_AFTER: End completions
+
+  overloadedDefaulted(x: 1, #^INVALID_DEFAULTED?check=VALID_DEFAULTED^#, w: "hello")
+  overloadedDefaulted(x: 1, #^INVALID_DEFAULTED_TYPO?check=VALID_DEFAULTED^#, zz: localA)
+  overloadedDefaulted(x: 1, #^INVALID_DEFAULTED_TYPO_TYPE?check=VALID_DEFAULTED^#, zz: "hello")
+
+  overloadedDefaulted(x: 1, #^INVALID_DEFAULTED_TYPE^#, z: localB)
+  // INVALID_DEFAULTED_TYPE: Begin completions, 2 items
+  // INVALID_DEFAULTED_TYPE-DAG: Pattern/Local/Flair[ArgLabels]: {#p: A#}[#A#]; name=p: A
+  // INVALID_DEFAULTED_TYPE-DAG: Pattern/Local/Flair[ArgLabels]: {#y: A#}[#A#]; name=y: A
+  // INVALID_DEFAULTED_TYPE: End completions
+}
